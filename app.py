@@ -5,7 +5,7 @@ import pandas as pd
 # =========================
 # CONFIG
 # =========================
-client = OpenAI()
+
 
 st.set_page_config(
     page_title="CMDB Pretraga",
