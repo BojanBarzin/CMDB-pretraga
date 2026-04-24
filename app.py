@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
 import os
-import time
 
 st.set_page_config(page_title="CMDB System", layout="wide")
 
-st.title("🔎 CMDB System - Instant Search")
+st.title("🔎 CMDB System")
 
 # =========================
 # LOAD DATA
@@ -17,13 +16,13 @@ def load_data():
     elif os.path.exists("data.xlsx"):
         return pd.read_excel("data.xlsx")
     else:
-        st.error("❌ Nedostaje data fajl (data.csv ili data.xlsx)")
+        st.error("❌ Nedostaje data.csv ili data.xlsx")
         return pd.DataFrame()
 
 df = load_data()
 
 # =========================
-# NOVI UREĐAJI
+# NOVI UREĐAJI FILE
 # =========================
 file_path = "novi_uredjaji.csv"
 
@@ -56,13 +55,11 @@ for col in full_df.columns:
             filtered_df = filtered_df[filtered_df[col].astype(str).isin(selected)]
 
 # =========================
-# INSTANT SEARCH
+# INSTANT SEARCH (ISPRAVLJEN)
 # =========================
-st.subheader("⚡ Instant pretraga")
+st.subheader("⚡ Pretraga")
 
-search = st.text_input("Kucaj za pretragu...")
-
-time.sleep(0.05)  # mali debounce
+search = st.text_input("Kucaj za pretragu")
 
 search_cols = [
     "Name",
@@ -75,9 +72,12 @@ search_cols = [
 available_cols = [c for c in search_cols if c in filtered_df.columns]
 
 if search:
-    mask = filtered_df[available_cols].astype(str).agg(" ".join, axis=1)\
-        .str.contains(search, case=False, na=False)
+    combined = filtered_df[available_cols].fillna("").astype(str).apply(
+        lambda x: " ".join(x),
+        axis=1
+    )
 
+    mask = combined.str.contains(search, case=False, na=False)
     result = filtered_df[mask]
 else:
     result = filtered_df
