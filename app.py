@@ -1,25 +1,29 @@
 import streamlit as st
 import pandas as pd
 import os
+import time
 
-st.set_page_config(page_title="CMDB Pretraga", layout="wide")
+st.set_page_config(page_title="CMDB System", layout="wide")
 
-st.title("🔎 CMDB Pretraga")
+st.title("🔎 CMDB System - Instant Search")
 
 # =========================
-# UČITAVANJE GLAVNE BAZE
+# LOAD DATA
 # =========================
 @st.cache_data
 def load_data():
-    try:
+    if os.path.exists("data.csv"):
         return pd.read_csv("data.csv")
-    except:
+    elif os.path.exists("data.xlsx"):
         return pd.read_excel("data.xlsx")
+    else:
+        st.error("❌ Nedostaje data fajl (data.csv ili data.xlsx)")
+        return pd.DataFrame()
 
 df = load_data()
 
 # =========================
-# UČITAVANJE NOVIH UREĐAJA
+# NOVI UREĐAJI
 # =========================
 file_path = "novi_uredjaji.csv"
 
@@ -27,12 +31,13 @@ if os.path.exists(file_path):
     novi_df = pd.read_csv(file_path)
 else:
     novi_df = pd.DataFrame(columns=[
-        "InventoryNumber", "SP_Broj", "Korisnik",
-        "Lokacija", "Tip", "Status"
+        "Name", "Model", "SerialNumber",
+        "InventoryNumber", "SPInventoryNumber",
+        "Status"
     ])
 
 # =========================
-# SPAJANJE PODATAKA
+# KOMBINOVANA BAZA
 # =========================
 full_df = pd.concat([df, novi_df], ignore_index=True)
 
@@ -51,125 +56,134 @@ for col in full_df.columns:
             filtered_df = filtered_df[filtered_df[col].astype(str).isin(selected)]
 
 # =========================
-# PRETRAGA
+# INSTANT SEARCH
 # =========================
-st.subheader("🔍 Pretraga")
+st.subheader("⚡ Instant pretraga")
 
-search = st.text_input("Pretraga po svim parametrima")
-column = st.selectbox("Kolona", ["Sve"] + list(full_df.columns))
+search = st.text_input("Kucaj za pretragu...")
+
+time.sleep(0.05)  # mali debounce
+
+search_cols = [
+    "Name",
+    "Model",
+    "SerialNumber",
+    "InventoryNumber",
+    "SPInventoryNumber"
+]
+
+available_cols = [c for c in search_cols if c in filtered_df.columns]
 
 if search:
-    if column == "Sve":
-        mask = filtered_df.astype(str).apply(
-            lambda row: row.str.contains(search, case=False, na=False).any(),
-            axis=1
-        )
-    else:
-        mask = filtered_df[column].astype(str).str.contains(search, case=False, na=False)
+    mask = filtered_df[available_cols].astype(str).agg(" ".join, axis=1)\
+        .str.contains(search, case=False, na=False)
 
     result = filtered_df[mask]
 else:
     result = filtered_df
 
-st.write(f"📄 Pronađeno: {len(result)} rezultata")
+st.write(f"📄 Rezultati: {len(result)}")
 st.dataframe(result, use_container_width=True)
 
 # =========================
-# UNOS NOVOG UREĐAJA
+# EXPORT
+# =========================
+st.download_button(
+    "📥 Export CSV",
+    result.to_csv(index=False).encode("utf-8"),
+    "cmdb_export.csv",
+    "text/csv"
+)
+
+# =========================
+# ➕ ADD DEVICE
 # =========================
 st.subheader("➕ Novi uređaj")
 
-with st.form("unos_forma"):
-    col1, col2 = st.columns(2)
+with st.form("add_device"):
+    c1, c2 = st.columns(2)
 
-    with col1:
-        inventory = st.text_input("Inventory broj")
-        sp_broj = st.text_input("SP broj")
-        korisnik = st.text_input("Korisnik")
+    with c1:
+        name = st.text_input("Name")
+        model = st.text_input("Model")
+        serial = st.text_input("SerialNumber")
 
-    with col2:
-        lokacija = st.text_input("Lokacija")
-        tip = st.text_input("Tip uređaja")
+    with c2:
+        inv = st.text_input("InventoryNumber")
+        sp = st.text_input("SPInventoryNumber")
         status = st.selectbox("Status", ["Aktivan", "Na servisu", "Otpisan"])
 
     submit = st.form_submit_button("💾 Sačuvaj")
 
     if submit:
-        # VALIDACIJA
-        if not inventory or not sp_broj:
-            st.error("❌ Inventory i SP broj su obavezni!")
-        elif inventory in full_df["InventoryNumber"].astype(str).values:
+        if not inv or not sp:
+            st.error("❌ Inventory i SP su obavezni!")
+        elif inv in full_df["InventoryNumber"].astype(str).values:
             st.error("❌ Inventory već postoji!")
-        elif sp_broj in full_df["SP_Broj"].astype(str).values:
-            st.error("❌ SP broj već postoji!")
+        elif sp in full_df["SPInventoryNumber"].astype(str).values:
+            st.error("❌ SP već postoji!")
         else:
-            new_data = pd.DataFrame([{
-                "InventoryNumber": inventory,
-                "SP_Broj": sp_broj,
-                "Korisnik": korisnik,
-                "Lokacija": lokacija,
-                "Tip": tip,
+            new_row = pd.DataFrame([{
+                "Name": name,
+                "Model": model,
+                "SerialNumber": serial,
+                "InventoryNumber": inv,
+                "SPInventoryNumber": sp,
                 "Status": status
             }])
 
             if os.path.exists(file_path):
-                new_data.to_csv(file_path, mode='a', header=False, index=False)
+                new_row.to_csv(file_path, mode="a", header=False, index=False)
             else:
-                new_data.to_csv(file_path, index=False)
+                new_row.to_csv(file_path, index=False)
 
-            st.success("✅ Uređaj dodat! Refresh stranice.")
+            st.success("✅ Uređaj dodat!")
 
 # =========================
-# EDIT POSTOJEĆIH UNOSA
+# EDIT DEVICE
 # =========================
-st.subheader("✏️ Izmena unosa (novi uređaji)")
+st.subheader("✏️ Edit uređaja")
 
 if not novi_df.empty:
-    selected_inv = st.selectbox(
-        "Izaberi Inventory za izmenu",
-        novi_df["InventoryNumber"]
-    )
 
-    edit_row = novi_df[novi_df["InventoryNumber"] == selected_inv].iloc[0]
+    selected = st.selectbox("Izaberi Inventory", novi_df["InventoryNumber"])
 
-    with st.form("edit_forma"):
-        col1, col2 = st.columns(2)
+    row = novi_df[novi_df["InventoryNumber"] == selected].iloc[0]
 
-        with col1:
-            new_inventory = st.text_input("Inventory", edit_row["InventoryNumber"])
-            new_sp = st.text_input("SP broj", edit_row["SP_Broj"])
-            new_korisnik = st.text_input("Korisnik", edit_row["Korisnik"])
+    with st.form("edit_device"):
+        c1, c2 = st.columns(2)
 
-        with col2:
-            new_lokacija = st.text_input("Lokacija", edit_row["Lokacija"])
-            new_tip = st.text_input("Tip", edit_row["Tip"])
-            new_status = st.selectbox(
+        with c1:
+            name_e = st.text_input("Name", row.get("Name", ""))
+            model_e = st.text_input("Model", row.get("Model", ""))
+            serial_e = st.text_input("SerialNumber", row.get("SerialNumber", ""))
+
+        with c2:
+            inv_e = st.text_input("InventoryNumber", row["InventoryNumber"])
+            sp_e = st.text_input("SPInventoryNumber", row["SPInventoryNumber"])
+            status_e = st.selectbox(
                 "Status",
                 ["Aktivan", "Na servisu", "Otpisan"],
-                index=["Aktivan", "Na servisu", "Otpisan"].index(edit_row["Status"])
+                index=["Aktivan", "Na servisu", "Otpisan"].index(row.get("Status", "Aktivan"))
             )
 
-        save_edit = st.form_submit_button("💾 Sačuvaj izmene")
+        save = st.form_submit_button("💾 Sačuvaj izmene")
 
-        if save_edit:
-            # VALIDACIJA (osim trenutnog reda)
-            temp_df = novi_df[novi_df["InventoryNumber"] != selected_inv]
+        if save:
+            temp = novi_df[novi_df["InventoryNumber"] != selected]
 
-            if new_inventory in temp_df["InventoryNumber"].astype(str).values:
+            if inv_e in temp["InventoryNumber"].astype(str).values:
                 st.error("❌ Inventory već postoji!")
-            elif new_sp in temp_df["SP_Broj"].astype(str).values:
-                st.error("❌ SP broj već postoji!")
+            elif sp_e in temp["SPInventoryNumber"].astype(str).values:
+                st.error("❌ SP već postoji!")
             else:
-                novi_df.loc[novi_df["InventoryNumber"] == selected_inv] = [
-                    new_inventory,
-                    new_sp,
-                    new_korisnik,
-                    new_lokacija,
-                    new_tip,
-                    new_status
+                novi_df.loc[novi_df["InventoryNumber"] == selected] = [
+                    name_e, model_e, serial_e,
+                    inv_e, sp_e, status_e
                 ]
 
                 novi_df.to_csv(file_path, index=False)
-                st.success("✅ Izmena sačuvana! Refresh stranice.")
+                st.success("✅ Izmenjeno!")
+
 else:
-    st.info("Nema novih uređaja za izmenu.")
+    st.info("Nema novih uređaja za edit.")
