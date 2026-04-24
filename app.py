@@ -1,117 +1,175 @@
 import streamlit as st
 import pandas as pd
+import os
 
+st.set_page_config(page_title="CMDB Pretraga", layout="wide")
 
-# =========================
-# CONFIG
-# =========================
-
-
-st.set_page_config(
-    page_title="CMDB Pretraga",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.title("🔎 CMDB Pretraga")
 
 # =========================
-# LOAD DATA (FAST CACHE)
+# UČITAVANJE GLAVNE BAZE
 # =========================
 @st.cache_data
 def load_data():
-    df = pd.read_excel("SPTS CMDB.xlsx")
-    df = df.astype(str)
-    return df
+    try:
+        return pd.read_csv("data.csv")
+    except:
+        return pd.read_excel("data.xlsx")
 
 df = load_data()
 
 # =========================
-# MOBILE UI STYLE (FULL SCREEN FEEL)
+# UČITAVANJE NOVIH UREĐAJA
 # =========================
-st.markdown("""
-    <style>
-        .block-container {
-            padding-top: 1rem;
-            padding-left: 1rem;
-            padding-right: 1rem;
-        }
-        header {visibility: hidden;}
-        footer {visibility: hidden;}
-    </style>
-""", unsafe_allow_html=True)
+file_path = "novi_uredjaji.csv"
 
-st.title("📦 CMDB Pretraga + AI Chat")
+if os.path.exists(file_path):
+    novi_df = pd.read_csv(file_path)
+else:
+    novi_df = pd.DataFrame(columns=[
+        "InventoryNumber", "SP_Broj", "Korisnik",
+        "Lokacija", "Tip", "Status"
+    ])
 
 # =========================
-# TABS (Search + AI)
+# SPAJANJE PODATAKA
 # =========================
-tab1, tab2 = st.tabs(["🔎 Pretraga", "🧠 AI Chat"])
+full_df = pd.concat([df, novi_df], ignore_index=True)
 
-# ==========================================================
-# 🔎 TAB 1 - INSTANT SEARCH (TYPE & SEARCH LIVE)
-# ==========================================================
-with tab1:
+# =========================
+# FILTERI
+# =========================
+st.sidebar.header("📊 Filteri")
 
-    query = st.text_input(
-        "Unesi inventarni / serijski / SP / model",
-        placeholder="Kucaj bilo šta..."
+filtered_df = full_df.copy()
+
+for col in full_df.columns:
+    unique_values = full_df[col].dropna().astype(str).unique()
+    if len(unique_values) < 50:
+        selected = st.sidebar.multiselect(f"{col}", unique_values)
+        if selected:
+            filtered_df = filtered_df[filtered_df[col].astype(str).isin(selected)]
+
+# =========================
+# PRETRAGA
+# =========================
+st.subheader("🔍 Pretraga")
+
+search = st.text_input("Pretraga po svim parametrima")
+column = st.selectbox("Kolona", ["Sve"] + list(full_df.columns))
+
+if search:
+    if column == "Sve":
+        mask = filtered_df.astype(str).apply(
+            lambda row: row.str.contains(search, case=False, na=False).any(),
+            axis=1
+        )
+    else:
+        mask = filtered_df[column].astype(str).str.contains(search, case=False, na=False)
+
+    result = filtered_df[mask]
+else:
+    result = filtered_df
+
+st.write(f"📄 Pronađeno: {len(result)} rezultata")
+st.dataframe(result, use_container_width=True)
+
+# =========================
+# UNOS NOVOG UREĐAJA
+# =========================
+st.subheader("➕ Novi uređaj")
+
+with st.form("unos_forma"):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        inventory = st.text_input("Inventory broj")
+        sp_broj = st.text_input("SP broj")
+        korisnik = st.text_input("Korisnik")
+
+    with col2:
+        lokacija = st.text_input("Lokacija")
+        tip = st.text_input("Tip uređaja")
+        status = st.selectbox("Status", ["Aktivan", "Na servisu", "Otpisan"])
+
+    submit = st.form_submit_button("💾 Sačuvaj")
+
+    if submit:
+        # VALIDACIJA
+        if not inventory or not sp_broj:
+            st.error("❌ Inventory i SP broj su obavezni!")
+        elif inventory in full_df["InventoryNumber"].astype(str).values:
+            st.error("❌ Inventory već postoji!")
+        elif sp_broj in full_df["SP_Broj"].astype(str).values:
+            st.error("❌ SP broj već postoji!")
+        else:
+            new_data = pd.DataFrame([{
+                "InventoryNumber": inventory,
+                "SP_Broj": sp_broj,
+                "Korisnik": korisnik,
+                "Lokacija": lokacija,
+                "Tip": tip,
+                "Status": status
+            }])
+
+            if os.path.exists(file_path):
+                new_data.to_csv(file_path, mode='a', header=False, index=False)
+            else:
+                new_data.to_csv(file_path, index=False)
+
+            st.success("✅ Uređaj dodat! Refresh stranice.")
+
+# =========================
+# EDIT POSTOJEĆIH UNOSA
+# =========================
+st.subheader("✏️ Izmena unosa (novi uređaji)")
+
+if not novi_df.empty:
+    selected_inv = st.selectbox(
+        "Izaberi Inventory za izmenu",
+        novi_df["InventoryNumber"]
     )
 
-    if query:
+    edit_row = novi_df[novi_df["InventoryNumber"] == selected_inv].iloc[0]
 
-        result = df[
-            df["InventoryNumber"].str.contains(query, case=False, na=False) |
-            df["SerialNumber"].str.contains(query, case=False, na=False) |
-            df["Model"].str.contains(query, case=False, na=False) |
-            df["SPInventoryNumber"].str.contains(query, case=False, na=False)
-        ]
+    with st.form("edit_forma"):
+        col1, col2 = st.columns(2)
 
-        st.success(f"Pronađeno: {len(result)}")
+        with col1:
+            new_inventory = st.text_input("Inventory", edit_row["InventoryNumber"])
+            new_sp = st.text_input("SP broj", edit_row["SP_Broj"])
+            new_korisnik = st.text_input("Korisnik", edit_row["Korisnik"])
 
-        for _, row in result.iterrows():
+        with col2:
+            new_lokacija = st.text_input("Lokacija", edit_row["Lokacija"])
+            new_tip = st.text_input("Tip", edit_row["Tip"])
+            new_status = st.selectbox(
+                "Status",
+                ["Aktivan", "Na servisu", "Otpisan"],
+                index=["Aktivan", "Na servisu", "Otpisan"].index(edit_row["Status"])
+            )
 
-            with st.container():
-                st.markdown("### 📦 Uređaj")
+        save_edit = st.form_submit_button("💾 Sačuvaj izmene")
 
-                st.write("🏷️ Inventarni:", row["InventoryNumber"])
-                st.write("🔢 Serijski:", row["SerialNumber"])
-                st.write("📦 Model:", row["Model"])
-                st.write("🧾 SP:", row["SPInventoryNumber"])
+        if save_edit:
+            # VALIDACIJA (osim trenutnog reda)
+            temp_df = novi_df[novi_df["InventoryNumber"] != selected_inv]
 
-                st.divider()
+            if new_inventory in temp_df["InventoryNumber"].astype(str).values:
+                st.error("❌ Inventory već postoji!")
+            elif new_sp in temp_df["SP_Broj"].astype(str).values:
+                st.error("❌ SP broj već postoji!")
+            else:
+                novi_df.loc[novi_df["InventoryNumber"] == selected_inv] = [
+                    new_inventory,
+                    new_sp,
+                    new_korisnik,
+                    new_lokacija,
+                    new_tip,
+                    new_status
+                ]
 
-# ==========================================================
-# 🧠 TAB 2 - AI CHAT NAD CSV
-# ==========================================================
-with tab2:
-
-    st.subheader("Postavi pitanje o opremi")
-
-    user_question = st.text_input("Npr: Koji uređaji imaju isti model?")
-
-    if user_question:
-
-        # uzmi mali sample za kontekst (brže)
-        sample_data = df.head(50).to_string()
-
-        prompt = f"""
-Ti si IT CMDB asistent.
-
-Podaci (primer):
-{sample_data}
-
-Korisnik pitanje:
-{user_question}
-
-Odgovori jasno i konkretno na osnovu podataka.
-"""
-
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "Ti si analitičar za IT opremu."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        st.write("🧠 Odgovor:")
-        st.success(response.choices[0].message.content)
+                novi_df.to_csv(file_path, index=False)
+                st.success("✅ Izmena sačuvana! Refresh stranice.")
+else:
+    st.info("Nema novih uređaja za izmenu.")
