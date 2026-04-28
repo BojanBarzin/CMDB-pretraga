@@ -206,6 +206,30 @@ def generate_internal_transfer(selected_rows, transfer_type):
     st.session_state.generated_file_name = file_name
     st.session_state.print_html = build_print_html(selected_rows, transfer_type)
 
+def add_selected_to_transfer(selected_rows):
+    if selected_rows.empty:
+        st.error("Nisi štiklirao nijedan uređaj.")
+        return
+
+    added = 0
+    existing_sp = [
+        x.get("SPInventoryNumber", "")
+        for x in st.session_state.transfer_list
+    ]
+
+    for _, row in selected_rows.iterrows():
+        sp = row.get("SPInventoryNumber", "")
+
+        if sp and sp not in existing_sp:
+            st.session_state.transfer_list.append(row.to_dict())
+            existing_sp.append(sp)
+            added += 1
+
+    if added > 0:
+        st.success(f"Dodato uređaja: {added}")
+    else:
+        st.warning("Nema novih uređaja za dodavanje.")
+
 # =========================
 # PRETRAGA
 # =========================
@@ -270,25 +294,7 @@ if search_value:
         selected_rows = edited_df[edited_df["Izaberi"] == True].drop(columns=["Izaberi"])
 
         if st.button("➕ Dodaj uređaj"):
-            added = 0
-
-            existing_sp = [
-                x.get("SPInventoryNumber", "")
-                for x in st.session_state.transfer_list
-            ]
-
-            for _, row in selected_rows.iterrows():
-                sp = row.get("SPInventoryNumber", "")
-
-                if sp and sp not in existing_sp:
-                    st.session_state.transfer_list.append(row.to_dict())
-                    existing_sp.append(sp)
-                    added += 1
-
-            if added > 0:
-                st.success(f"Dodato uređaja: {added}")
-            else:
-                st.warning("Nema novih uređaja za dodavanje.")
+            add_selected_to_transfer(selected_rows)
 
         st.download_button(
             "📥 Preuzmi filtrirani CMDB",
@@ -300,12 +306,76 @@ else:
     st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
 
 # =========================
+# POSLEDNJA ŠANSA
+# =========================
+st.markdown("---")
+st.subheader("🔍 Poslednja šansa")
+st.caption("Ako nisi našao uređaj pokušaj još jednom ovde")
+
+last_chance_value = st.text_input(
+    "Pretraga po svim kolonama",
+    key="last_chance_search"
+)
+
+if last_chance_value:
+    search_text = last_chance_value.lower()
+
+    last_chance_df = df[
+        df.apply(
+            lambda row: row.astype(str).str.lower().str.contains(search_text).any(),
+            axis=1
+        )
+    ].copy()
+
+    st.subheader(f"📦 Rezultati poslednje šanse: {len(last_chance_df)}")
+
+    if last_chance_df.empty:
+        st.info("Nema rezultata.")
+    else:
+        display_cols = [
+            "Name", "Vendor", "Model", "Type",
+            "SPInventoryNumber", "InventoryNumber", "SerialNumber"
+        ]
+
+        available_cols = [c for c in display_cols if c in last_chance_df.columns]
+
+        view_df = last_chance_df[available_cols].copy()
+        view_df.insert(0, "Izaberi", False)
+
+        edited_last_df = st.data_editor(
+            view_df,
+            use_container_width=True,
+            hide_index=True,
+            height=350,
+            key="last_chance_editor",
+            column_config={
+                "Izaberi": st.column_config.CheckboxColumn("Izaberi")
+            },
+            disabled=available_cols
+        )
+
+        selected_last_rows = edited_last_df[
+            edited_last_df["Izaberi"] == True
+        ].drop(columns=["Izaberi"])
+
+        if st.button("➕ Dodaj uređaj iz poslednje šanse"):
+            add_selected_to_transfer(selected_last_rows)
+
+# =========================
 # LISTA ZA INTERNI PRENOS
 # =========================
 st.markdown("---")
 st.subheader("🔁 Lista za interni prenos")
 
 if st.session_state.transfer_list:
+    header_cols = st.columns([2, 2, 2, 2, 2, 1])
+    header_cols[0].markdown("**Name**")
+    header_cols[1].markdown("**Model**")
+    header_cols[2].markdown("**SP**")
+    header_cols[3].markdown("**Inventory**")
+    header_cols[4].markdown("**Serial**")
+    header_cols[5].markdown("**Ukloni**")
+
     for i, row in enumerate(st.session_state.transfer_list):
         c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 2, 2, 1])
 
