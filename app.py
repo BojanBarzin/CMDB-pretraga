@@ -52,6 +52,67 @@ def to_excel(dataframe):
     return output.getvalue()
 
 
+def print_document_button(selected_rows, transfer_type):
+    if transfer_type == "BG_NS":
+        naslov = "Interni prenos BG → NS"
+        iz_magacina = "FSBG"
+        zaduzio = "FSNS"
+    else:
+        naslov = "Interni prenos NIŠ → NS"
+        iz_magacina = "FSNIŠ"
+        zaduzio = "FSNS"
+
+    rows_html = ""
+    for i, row in enumerate(selected_rows, start=1):
+        rows_html += f"""
+        <tr>
+            <td>{i}</td>
+            <td>{row.get("Name", "")}</td>
+            <td>{row.get("Model", "")}</td>
+            <td>{row.get("InventoryNumber", "")}</td>
+            <td>{row.get("SerialNumber", "")}</td>
+            <td>{row.get("SPInventoryNumber", "")}</td>
+        </tr>
+        """
+
+    html = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial; padding: 30px; }}
+            h2 {{ text-align: center; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            td, th {{ border: 1px solid black; padding: 6px; text-align: center; }}
+        </style>
+    </head>
+    <body>
+        <h2>{naslov}</h2>
+        <p><b>Datum:</b> {date.today().strftime("%d.%m.%Y")}</p>
+        <p><b>Iz magacina:</b> {iz_magacina}</p>
+        <p><b>Uređaj zadužio:</b> {zaduzio}</p>
+
+        <table>
+            <tr>
+                <th>BR</th>
+                <th>NAZIV</th>
+                <th>MODEL</th>
+                <th>INV</th>
+                <th>SN</th>
+                <th>SP/FS</th>
+            </tr>
+            {rows_html}
+        </table>
+
+        <script>
+            window.print();
+        </script>
+    </body>
+    </html>
+    """
+
+    st.components.v1.html(html, height=0)
+
+
 def generate_internal_transfer(selected_rows, transfer_type):
     if not selected_rows:
         st.error("Lista za interni prenos je prazna.")
@@ -79,19 +140,13 @@ def generate_internal_transfer(selected_rows, transfer_type):
 
     set_cell(ws, "F4", broj_prenosa)
     set_cell(ws, "G5", date.today().strftime("%d.%m.%Y"))
-
     set_cell(ws, iz_magacina_cell, iz_magacina)
     set_cell(ws, "G8", uredjaj_zaduzio)
-
-    set_cell(ws, "G9", "")
-    set_cell(ws, "G10", "")
-    set_cell(ws, "G11", "")
 
     start_row = 14
 
     for i, row in enumerate(selected_rows, start=1):
         r = start_row + i - 1
-
         set_cell(ws, f"B{r}", i)
         set_cell(ws, f"C{r}", row.get("Name", ""))
         set_cell(ws, f"D{r}", row.get("Model", ""))
@@ -101,13 +156,22 @@ def generate_internal_transfer(selected_rows, transfer_type):
 
     out = BytesIO()
     wb.save(out)
+    excel_bytes = out.getvalue()
 
-    st.download_button(
-        "Preuzmi internu otpremnicu",
-        data=out.getvalue(),
-        file_name=file_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.download_button(
+            "📥 Preuzmi dokument",
+            data=excel_bytes,
+            file_name=file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    with col2:
+        if st.button("🖨️ Print dokument"):
+            print_document_button(selected_rows, transfer_type)
+
 
 # =========================
 # PRETRAGA
@@ -115,11 +179,11 @@ def generate_internal_transfer(selected_rows, transfer_type):
 st.subheader("🔎 Pretraga")
 
 SEARCH_COLUMNS = [
+    "SPInventoryNumber",
     "Name",
     "Vendor",
     "Model",
     "Type",
-    "SPInventoryNumber",
     "InventoryNumber",
     "SerialNumber"
 ]
@@ -129,7 +193,11 @@ available_search_columns = [c for c in SEARCH_COLUMNS if c in df.columns]
 col_search_1, col_search_2 = st.columns([1, 2])
 
 with col_search_1:
-    search_col = st.selectbox("Parametar", available_search_columns)
+    search_col = st.selectbox(
+        "Parametar",
+        available_search_columns,
+        index=available_search_columns.index("SPInventoryNumber") if "SPInventoryNumber" in available_search_columns else 0
+    )
 
 with col_search_2:
     search_value = st.text_input("Vrednost za pretragu")
@@ -141,22 +209,13 @@ if search_value:
 
     st.subheader(f"📦 Rezultati: {len(filtered_df)}")
 
-    if filtered_df.empty:
-        st.info("Nema rezultata.")
-    else:
+    if not filtered_df.empty:
         display_cols = [
-            "Name",
-            "Vendor",
-            "Model",
-            "Type",
-            "SPInventoryNumber",
-            "InventoryNumber",
-            "SerialNumber"
+            "Name","Vendor","Model","Type",
+            "SPInventoryNumber","InventoryNumber","SerialNumber"
         ]
 
-        available_cols = [c for c in display_cols if c in filtered_df.columns]
-
-        view_df = filtered_df[available_cols].copy()
+        view_df = filtered_df[display_cols].copy()
         view_df.insert(0, "Izaberi", False)
 
         edited_df = st.data_editor(
@@ -164,79 +223,49 @@ if search_value:
             use_container_width=True,
             hide_index=True,
             height=350,
-            key="cmdb_selection_editor",
-            column_config={
-                "Izaberi": st.column_config.CheckboxColumn(
-                    "Izaberi",
-                    default=False
-                )
-            },
-            disabled=available_cols
+            key="editor",
+            column_config={"Izaberi": st.column_config.CheckboxColumn("Izaberi")},
+            disabled=display_cols
         )
 
-        selected_rows = edited_df[edited_df["Izaberi"] == True].drop(columns=["Izaberi"])
+        selected_rows = edited_df[edited_df["Izaberi"]].drop(columns=["Izaberi"])
 
-        if st.button("➕ Dodaj uređaj za interni prenos"):
-            if selected_rows.empty:
-                st.error("Nisi štiklirao nijedan uređaj.")
-            else:
-                added = 0
-
-                existing_keys = {
-                    row.get("SPInventoryNumber", "")
-                    for row in st.session_state.transfer_list
-                }
-
-                for _, row in selected_rows.iterrows():
-                    sp = row.get("SPInventoryNumber", "")
-
-                    if sp and sp not in existing_keys:
-                        st.session_state.transfer_list.append(row.to_dict())
-                        existing_keys.add(sp)
-                        added += 1
-
-                st.success(f"Dodato uređaja: {added}")
-
-        st.download_button(
-            "📥 Preuzmi filtrirani CMDB",
-            data=to_excel(edited_df.drop(columns=["Izaberi"])),
-            file_name="cmdb_pregled.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-else:
-    st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
+        if st.button("➕ Dodaj uređaj"):
+            for _, row in selected_rows.iterrows():
+                if row["SPInventoryNumber"] not in [x["SPInventoryNumber"] for x in st.session_state.transfer_list]:
+                    st.session_state.transfer_list.append(row.to_dict())
 
 # =========================
-# INTERNI PRENOS
+# LISTA
 # =========================
 st.markdown("---")
 st.subheader("🔁 Lista za interni prenos")
 
 if st.session_state.transfer_list:
     transfer_df = pd.DataFrame(st.session_state.transfer_list)
+    st.dataframe(transfer_df, use_container_width=True, hide_index=True)
 
-    st.dataframe(
-        transfer_df,
-        use_container_width=True,
-        hide_index=True
+    remove_index = st.selectbox(
+        "Ukloni uređaj",
+        [""] + list(range(1, len(st.session_state.transfer_list)+1))
     )
 
-    st.info(f"Ukupno uređaja za prenos: {len(st.session_state.transfer_list)}")
-else:
-    st.info("Lista je prazna.")
+    if st.button("Ukloni"):
+        if remove_index:
+            st.session_state.transfer_list.pop(remove_index-1)
+            st.rerun()
 
-col_bg, col_nis, col_clear = st.columns(3)
+col1, col2, col3 = st.columns(3)
 
-with col_bg:
+with col1:
     if st.button("BG → NS"):
         generate_internal_transfer(st.session_state.transfer_list, "BG_NS")
 
-with col_nis:
+with col2:
     if st.button("NIŠ → NS"):
         generate_internal_transfer(st.session_state.transfer_list, "NIS_NS")
 
-with col_clear:
-    if st.button("Obriši izbor"):
+with col3:
+    if st.button("Obriši listu"):
         st.session_state.transfer_list = []
-        st.success("Lista obrisana")
+        st.rerun()
