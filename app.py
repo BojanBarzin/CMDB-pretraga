@@ -8,6 +8,15 @@ from datetime import date
 st.set_page_config(page_title="CMDB Pregled", layout="wide")
 st.title("📊 CMDB Pregled")
 
+# =========================
+# SESSION STATE
+# =========================
+if "selected_transfer_rows" not in st.session_state:
+    st.session_state.selected_transfer_rows = pd.DataFrame()
+
+# =========================
+# LOAD DATA
+# =========================
 @st.cache_data
 def load_data():
     try:
@@ -21,6 +30,9 @@ if df.empty:
     st.warning("data.xlsx nije pronađen ili je prazan")
     st.stop()
 
+# =========================
+# HELPERS
+# =========================
 def set_cell(ws, cell, value):
     for merged_range in ws.merged_cells.ranges:
         if cell in merged_range:
@@ -28,8 +40,10 @@ def set_cell(ws, cell, value):
             ws[top_left] = value
             ws[top_left].alignment = Alignment(horizontal="center", vertical="center")
             return
+
     ws[cell] = value
     ws[cell].alignment = Alignment(horizontal="center", vertical="center")
+
 
 def to_excel(dataframe):
     output = BytesIO()
@@ -37,6 +51,10 @@ def to_excel(dataframe):
         dataframe.to_excel(writer, index=False, sheet_name="CMDB")
     return output.getvalue()
 
+
+# =========================
+# SEARCH
+# =========================
 st.subheader("🔎 Pretraga")
 
 SEARCH_COLUMNS = [
@@ -59,8 +77,6 @@ with col_search_1:
 with col_search_2:
     search_value = st.text_input("Vrednost za pretragu")
 
-selected_rows = []
-
 if search_value:
     filtered_df = df[
         df[search_col].astype(str).str.contains(search_value, case=False, na=False)
@@ -72,19 +88,26 @@ if search_value:
         st.info("Nema rezultata.")
     else:
         display_cols = [
-            "Name", "Vendor", "Model", "Type",
-            "SPInventoryNumber", "InventoryNumber", "SerialNumber"
+            "Name",
+            "Vendor",
+            "Model",
+            "Type",
+            "SPInventoryNumber",
+            "InventoryNumber",
+            "SerialNumber"
         ]
+
         available_cols = [c for c in display_cols if c in filtered_df.columns]
 
-        filtered_df = filtered_df[available_cols].copy()
-        filtered_df.insert(0, "Izaberi", False)
+        view_df = filtered_df[available_cols].copy()
+        view_df.insert(0, "Izaberi", False)
 
         edited_df = st.data_editor(
-            filtered_df,
+            view_df,
             use_container_width=True,
             hide_index=True,
             height=350,
+            key="cmdb_selection_editor",
             column_config={
                 "Izaberi": st.column_config.CheckboxColumn(
                     "Izaberi",
@@ -96,8 +119,12 @@ if search_value:
 
         selected_rows = edited_df[edited_df["Izaberi"] == True].drop(columns=["Izaberi"])
 
-        if not selected_rows.empty:
-            st.success(f"Izabrano uređaja: {len(selected_rows)}")
+        if st.button("Sačuvaj izabrane za interni prenos"):
+            st.session_state.selected_transfer_rows = selected_rows.copy()
+            st.success(f"Sačuvano za interni prenos: {len(selected_rows)} uređaja")
+
+        if not st.session_state.selected_transfer_rows.empty:
+            st.info(f"Trenutno izabrano za interni prenos: {len(st.session_state.selected_transfer_rows)} uređaja")
 
         st.download_button(
             "📥 Preuzmi filtrirani CMDB",
@@ -108,9 +135,13 @@ if search_value:
 else:
     st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
 
+
+# =========================
+# INTERNAL TRANSFER
+# =========================
 def generate_internal_transfer(selected_df, transfer_type):
     if selected_df.empty:
-        st.error("Nisi izabrao nijedan uređaj.")
+        st.error("Nisi izabrao nijedan uređaj. Prvo štikliraj uređaj i klikni 'Sačuvaj izabrane za interni prenos'.")
         st.stop()
 
     if transfer_type == "BG_NS":
@@ -118,11 +149,13 @@ def generate_internal_transfer(selected_df, transfer_type):
         iz_magacina = "FSBG"
         uredjaj_zaduzio = "FSNS"
         file_name = "interni_prenos_BG_NS.xlsx"
+        iz_magacina_cell = "B8"
     else:
         broj_prenosa = "FSNIS-FSNS"
         iz_magacina = "FSNIŠ"
         uredjaj_zaduzio = "FSNS"
         file_name = "interni_prenos_NIS_NS.xlsx"
+        iz_magacina_cell = "C8"  # FSNIŠ jedno polje desno
 
     try:
         wb = load_workbook("otpremnica_template.xlsx")
@@ -134,7 +167,7 @@ def generate_internal_transfer(selected_df, transfer_type):
     set_cell(ws, "F4", broj_prenosa)
     set_cell(ws, "G5", date.today().strftime("%d.%m.%Y"))
 
-    set_cell(ws, "B8", iz_magacina)
+    set_cell(ws, iz_magacina_cell, iz_magacina)
     set_cell(ws, "G8", uredjaj_zaduzio)
 
     set_cell(ws, "G9", "")
@@ -143,10 +176,10 @@ def generate_internal_transfer(selected_df, transfer_type):
 
     start_row = 14
 
-    for i, row in selected_df.iterrows():
-        r = start_row + i
+    for n, (_, row) in enumerate(selected_df.iterrows(), start=1):
+        r = start_row + n - 1
 
-        set_cell(ws, f"B{r}", i + 1)
+        set_cell(ws, f"B{r}", n)
         set_cell(ws, f"C{r}", row.get("Name", ""))
         set_cell(ws, f"D{r}", row.get("Model", ""))
         set_cell(ws, f"E{r}", row.get("InventoryNumber", ""))
@@ -163,15 +196,28 @@ def generate_internal_transfer(selected_df, transfer_type):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+
 st.markdown("---")
 st.subheader("🔁 Interni prenos")
 
-col_bg, col_nis = st.columns(2)
+if not st.session_state.selected_transfer_rows.empty:
+    st.dataframe(
+        st.session_state.selected_transfer_rows,
+        use_container_width=True,
+        hide_index=True
+    )
+
+col_bg, col_nis, col_clear = st.columns(3)
 
 with col_bg:
     if st.button("BG → NS"):
-        generate_internal_transfer(selected_rows, "BG_NS")
+        generate_internal_transfer(st.session_state.selected_transfer_rows, "BG_NS")
 
 with col_nis:
     if st.button("NIŠ → NS"):
-        generate_internal_transfer(selected_rows, "NIS_NS")
+        generate_internal_transfer(st.session_state.selected_transfer_rows, "NIS_NS")
+
+with col_clear:
+    if st.button("Obriši izbor"):
+        st.session_state.selected_transfer_rows = pd.DataFrame()
+        st.success("Izbor obrisan")
