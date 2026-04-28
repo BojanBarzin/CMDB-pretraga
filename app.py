@@ -39,6 +39,7 @@ def set_cell(ws, cell, value):
     ws[cell] = value
     ws[cell].alignment = Alignment(horizontal="center", vertical="center")
 
+
 def to_excel(dataframe):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -118,18 +119,34 @@ st.download_button(
 )
 
 # =========================
-# INTERNI PRENOS BG -> NS
+# INTERNI PRENOS
 # =========================
 st.markdown("---")
-st.subheader("🔁 Interni prenos BG → NS")
+st.subheader("🔁 Interni prenos")
 
 if "internal_transfer" not in st.session_state:
     st.session_state.internal_transfer = False
 
-if st.button("Interni prenos BG → NS"):
+if st.button("Interni prenos"):
     st.session_state.internal_transfer = True
 
 if st.session_state.internal_transfer:
+
+    transfer_type = st.selectbox(
+        "Tip internog prenosa",
+        ["BG → NS", "FSNIŠ → FSNS"]
+    )
+
+    if transfer_type == "BG → NS":
+        broj_prenosa = "BG-NS"
+        iz_magacina = "FSBG"
+        uredjaj_zaduzio = "FSNS"
+        file_suffix = "BG_NS"
+    else:
+        broj_prenosa = "FSNIS-FSNS"
+        iz_magacina = "FSNIŠ"
+        uredjaj_zaduzio = "FSNS"
+        file_suffix = "FSNIS_FSNS"
 
     transfer_count = st.number_input(
         "Broj uređaja za interni prenos",
@@ -211,11 +228,11 @@ if st.session_state.internal_transfer:
             st.error("Nije pronađen fajl: otpremnica_template.xlsx")
             st.stop()
 
-        set_cell(ws, "F4", "BG-NS")
+        set_cell(ws, "F4", broj_prenosa)
         set_cell(ws, "G5", date.today().strftime("%d.%m.%Y"))
 
-        # UREĐAJ ZADUŽIO uvek FSNS
-        set_cell(ws, "G8", "FSNS")
+        set_cell(ws, "B8", iz_magacina)
+        set_cell(ws, "G8", uredjaj_zaduzio)
 
         set_cell(ws, "G9", "")
         set_cell(ws, "G10", "")
@@ -239,6 +256,6 @@ if st.session_state.internal_transfer:
         st.download_button(
             "Preuzmi internu otpremnicu",
             data=out.getvalue(),
-            file_name="interni_prenos_BG_NS.xlsx",
+            file_name=f"interni_prenos_{file_suffix}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
