@@ -39,66 +39,77 @@ def to_excel(dataframe):
 
 st.subheader("🔎 Pretraga")
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    f_name = st.text_input("Name")
-    f_vendor = st.text_input("Vendor")
-with c2:
-    f_model = st.text_input("Model")
-    f_type = st.text_input("Type")
-with c3:
-    f_sp = st.text_input("SPInventoryNumber")
-    f_inv = st.text_input("InventoryNumber")
-with c4:
-    f_serial = st.text_input("SerialNumber")
+SEARCH_COLUMNS = [
+    "Name",
+    "Vendor",
+    "Model",
+    "Type",
+    "SPInventoryNumber",
+    "InventoryNumber",
+    "SerialNumber"
+]
 
-filtered_df = df.copy()
+available_search_columns = [c for c in SEARCH_COLUMNS if c in df.columns]
 
-filters = {
-    "Name": f_name,
-    "Vendor": f_vendor,
-    "Model": f_model,
-    "Type": f_type,
-    "SPInventoryNumber": f_sp,
-    "InventoryNumber": f_inv,
-    "SerialNumber": f_serial,
-}
+col_search_1, col_search_2 = st.columns([1, 2])
 
-for col, value in filters.items():
-    if value and col in filtered_df.columns:
-        filtered_df = filtered_df[
-            filtered_df[col].astype(str).str.contains(value, case=False, na=False)
-        ]
+with col_search_1:
+    search_col = st.selectbox("Parametar", available_search_columns)
 
-st.subheader(f"📦 Rezultati: {len(filtered_df)}")
+with col_search_2:
+    search_value = st.text_input("Vrednost za pretragu")
 
 selected_rows = []
 
-if not filtered_df.empty:
-    display_cols = [
-        "Name", "Vendor", "Model", "Type",
-        "SPInventoryNumber", "InventoryNumber", "SerialNumber"
-    ]
-    available_cols = [c for c in display_cols if c in filtered_df.columns]
+if search_value:
+    filtered_df = df[
+        df[search_col].astype(str).str.contains(search_value, case=False, na=False)
+    ].copy()
 
-    for idx, row in filtered_df.iterrows():
-        label = " | ".join([f"{col}: {row.get(col, '')}" for col in available_cols])
+    st.subheader(f"📦 Rezultati: {len(filtered_df)}")
 
-        if st.checkbox(label, key=f"select_{idx}"):
-            selected_rows.append(row)
+    if filtered_df.empty:
+        st.info("Nema rezultata.")
+    else:
+        display_cols = [
+            "Name", "Vendor", "Model", "Type",
+            "SPInventoryNumber", "InventoryNumber", "SerialNumber"
+        ]
+        available_cols = [c for c in display_cols if c in filtered_df.columns]
 
+        filtered_df = filtered_df[available_cols].copy()
+        filtered_df.insert(0, "Izaberi", False)
+
+        edited_df = st.data_editor(
+            filtered_df,
+            use_container_width=True,
+            hide_index=True,
+            height=350,
+            column_config={
+                "Izaberi": st.column_config.CheckboxColumn(
+                    "Izaberi",
+                    default=False
+                )
+            },
+            disabled=available_cols
+        )
+
+        selected_rows = edited_df[edited_df["Izaberi"] == True].drop(columns=["Izaberi"])
+
+        if not selected_rows.empty:
+            st.success(f"Izabrano uređaja: {len(selected_rows)}")
+
+        st.download_button(
+            "📥 Preuzmi filtrirani CMDB",
+            data=to_excel(edited_df.drop(columns=["Izaberi"])),
+            file_name="cmdb_pregled.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 else:
-    st.info("Nema rezultata za prikaz.")
+    st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
 
-st.download_button(
-    "📥 Preuzmi filtrirani CMDB",
-    data=to_excel(filtered_df),
-    file_name="cmdb_pregled.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-def generate_internal_transfer(selected_rows, transfer_type):
-    if not selected_rows:
+def generate_internal_transfer(selected_df, transfer_type):
+    if selected_df.empty:
         st.error("Nisi izabrao nijedan uređaj.")
         st.stop()
 
@@ -132,7 +143,7 @@ def generate_internal_transfer(selected_rows, transfer_type):
 
     start_row = 14
 
-    for i, row in enumerate(selected_rows):
+    for i, row in selected_df.iterrows():
         r = start_row + i
 
         set_cell(ws, f"B{r}", i + 1)
