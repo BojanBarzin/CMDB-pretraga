@@ -1,8 +1,113 @@
+import streamlit as st
+import pandas as pd
+from io import BytesIO
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
+from datetime import date
+
+st.set_page_config(page_title="CMDB Pregled", layout="wide")
+st.title("📊 CMDB Pregled")
+
 # =========================
 # SESSION STATE
 # =========================
 if "transfer_list" not in st.session_state:
     st.session_state.transfer_list = []
+
+# =========================
+# LOAD DATA
+# =========================
+@st.cache_data
+def load_data():
+    try:
+        return pd.read_excel("data.xlsx", dtype=str).fillna("")
+    except:
+        return pd.DataFrame()
+
+df = load_data()
+
+if df.empty:
+    st.warning("data.xlsx nije pronađen ili je prazan")
+    st.stop()
+
+# =========================
+# HELPERS
+# =========================
+def set_cell(ws, cell, value):
+    for merged_range in ws.merged_cells.ranges:
+        if cell in merged_range:
+            top_left = merged_range.start_cell.coordinate
+            ws[top_left] = value
+            ws[top_left].alignment = Alignment(horizontal="center", vertical="center")
+            return
+
+    ws[cell] = value
+    ws[cell].alignment = Alignment(horizontal="center", vertical="center")
+
+
+def to_excel(dataframe):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        dataframe.to_excel(writer, index=False, sheet_name="CMDB")
+    return output.getvalue()
+
+
+def generate_internal_transfer(selected_rows, transfer_type):
+    if not selected_rows:
+        st.error("Lista za interni prenos je prazna.")
+        st.stop()
+
+    if transfer_type == "BG_NS":
+        broj_prenosa = "BG-NS"
+        iz_magacina = "FSBG"
+        uredjaj_zaduzio = "FSNS"
+        file_name = "interni_prenos_BG_NS.xlsx"
+        iz_magacina_cell = "B8"
+    else:
+        broj_prenosa = "FSNIS-FSNS"
+        iz_magacina = "FSNIŠ"
+        uredjaj_zaduzio = "FSNS"
+        file_name = "interni_prenos_NIS_NS.xlsx"
+        iz_magacina_cell = "C8"
+
+    try:
+        wb = load_workbook("otpremnica_template.xlsx")
+        ws = wb.active
+    except:
+        st.error("Nije pronađen fajl: otpremnica_template.xlsx")
+        st.stop()
+
+    set_cell(ws, "F4", broj_prenosa)
+    set_cell(ws, "G5", date.today().strftime("%d.%m.%Y"))
+
+    set_cell(ws, iz_magacina_cell, iz_magacina)
+    set_cell(ws, "G8", uredjaj_zaduzio)
+
+    set_cell(ws, "G9", "")
+    set_cell(ws, "G10", "")
+    set_cell(ws, "G11", "")
+
+    start_row = 14
+
+    for i, row in enumerate(selected_rows, start=1):
+        r = start_row + i - 1
+
+        set_cell(ws, f"B{r}", i)
+        set_cell(ws, f"C{r}", row.get("Name", ""))
+        set_cell(ws, f"D{r}", row.get("Model", ""))
+        set_cell(ws, f"E{r}", row.get("InventoryNumber", ""))
+        set_cell(ws, f"F{r}", row.get("SerialNumber", ""))
+        set_cell(ws, f"G{r}", row.get("SPInventoryNumber", ""))
+
+    out = BytesIO()
+    wb.save(out)
+
+    st.download_button(
+        "Preuzmi internu otpremnicu",
+        data=out.getvalue(),
+        file_name=file_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 # =========================
 # PRETRAGA
@@ -61,7 +166,10 @@ if search_value:
             height=350,
             key="cmdb_selection_editor",
             column_config={
-                "Izaberi": st.column_config.CheckboxColumn("Izaberi", default=False)
+                "Izaberi": st.column_config.CheckboxColumn(
+                    "Izaberi",
+                    default=False
+                )
             },
             disabled=available_cols
         )
@@ -89,69 +197,19 @@ if search_value:
 
                 st.success(f"Dodato uređaja: {added}")
 
+        st.download_button(
+            "📥 Preuzmi filtrirani CMDB",
+            data=to_excel(edited_df.drop(columns=["Izaberi"])),
+            file_name="cmdb_pregled.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
 else:
     st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
 
 # =========================
 # INTERNI PRENOS
 # =========================
-def generate_internal_transfer(selected_rows, transfer_type):
-    if not selected_rows:
-        st.error("Lista za interni prenos je prazna.")
-        st.stop()
-
-    if transfer_type == "BG_NS":
-        broj_prenosa = "BG-NS"
-        iz_magacina = "FSBG"
-        uredjaj_zaduzio = "FSNS"
-        file_name = "interni_prenos_BG_NS.xlsx"
-        iz_magacina_cell = "B8"
-    else:
-        broj_prenosa = "FSNIS-FSNS"
-        iz_magacina = "FSNIŠ"
-        uredjaj_zaduzio = "FSNS"
-        file_name = "interni_prenos_NIS_NS.xlsx"
-        iz_magacina_cell = "C8"
-
-    try:
-        wb = load_workbook("otpremnica_template.xlsx")
-        ws = wb.active
-    except:
-        st.error("Nije pronađen fajl: otpremnica_template.xlsx")
-        st.stop()
-
-    set_cell(ws, "F4", broj_prenosa)
-    set_cell(ws, "G5", date.today().strftime("%d.%m.%Y"))
-
-    set_cell(ws, iz_magacina_cell, iz_magacina)
-    set_cell(ws, "G8", uredjaj_zaduzio)
-
-    set_cell(ws, "G9", "")
-    set_cell(ws, "G10", "")
-    set_cell(ws, "G11", "")
-
-    start_row = 14
-
-    for i, row in enumerate(selected_rows, start=1):
-        r = start_row + i - 1
-
-        set_cell(ws, f"B{r}", i)
-        set_cell(ws, f"C{r}", row.get("Name", ""))
-        set_cell(ws, f"D{r}", row.get("Model", ""))
-        set_cell(ws, f"E{r}", row.get("InventoryNumber", ""))
-        set_cell(ws, f"F{r}", row.get("SerialNumber", ""))
-        set_cell(ws, f"G{r}", row.get("SPInventoryNumber", ""))
-
-    out = BytesIO()
-    wb.save(out)
-
-    st.download_button(
-        "Preuzmi internu otpremnicu",
-        data=out.getvalue(),
-        file_name=file_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
 st.markdown("---")
 st.subheader("🔁 Lista za interni prenos")
 
