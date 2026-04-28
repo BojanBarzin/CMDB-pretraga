@@ -4,19 +4,23 @@ from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 from datetime import date
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="CMDB Pregled", layout="wide")
 st.title("📊 CMDB Pregled")
 
-# =========================
-# SESSION STATE
-# =========================
 if "transfer_list" not in st.session_state:
     st.session_state.transfer_list = []
 
-# =========================
-# LOAD DATA
-# =========================
+if "generated_excel" not in st.session_state:
+    st.session_state.generated_excel = None
+
+if "generated_file_name" not in st.session_state:
+    st.session_state.generated_file_name = ""
+
+if "print_html" not in st.session_state:
+    st.session_state.print_html = ""
+
 @st.cache_data
 def load_data():
     try:
@@ -30,9 +34,6 @@ if df.empty:
     st.warning("data.xlsx nije pronađen ili je prazan")
     st.stop()
 
-# =========================
-# HELPERS
-# =========================
 def set_cell(ws, cell, value):
     for merged_range in ws.merged_cells.ranges:
         if cell in merged_range:
@@ -44,15 +45,13 @@ def set_cell(ws, cell, value):
     ws[cell] = value
     ws[cell].alignment = Alignment(horizontal="center", vertical="center")
 
-
 def to_excel(dataframe):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dataframe.to_excel(writer, index=False, sheet_name="CMDB")
     return output.getvalue()
 
-
-def print_document_button(selected_rows, transfer_type):
+def build_print_html(selected_rows, transfer_type):
     if transfer_type == "BG_NS":
         naslov = "Interni prenos BG → NS"
         iz_magacina = "FSBG"
@@ -63,6 +62,7 @@ def print_document_button(selected_rows, transfer_type):
         zaduzio = "FSNS"
 
     rows_html = ""
+
     for i, row in enumerate(selected_rows, start=1):
         rows_html += f"""
         <tr>
@@ -75,21 +75,68 @@ def print_document_button(selected_rows, transfer_type):
         </tr>
         """
 
-    html = f"""
+    return f"""
     <html>
     <head>
         <style>
-            body {{ font-family: Arial; padding: 30px; }}
-            h2 {{ text-align: center; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-            td, th {{ border: 1px solid black; padding: 6px; text-align: center; }}
+            body {{
+                font-family: Arial, sans-serif;
+                padding: 30px;
+                color: #000;
+            }}
+            h2 {{
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            .info {{
+                margin-bottom: 20px;
+                font-size: 14px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }}
+            th, td {{
+                border: 1px solid #000;
+                padding: 6px;
+                text-align: center;
+                font-size: 13px;
+            }}
+            th {{
+                font-weight: bold;
+            }}
+            .signatures {{
+                margin-top: 60px;
+                display: flex;
+                justify-content: space-between;
+                font-size: 13px;
+            }}
+            .sig {{
+                width: 35%;
+                text-align: center;
+                border-top: 1px solid #000;
+                padding-top: 8px;
+            }}
+            @media print {{
+                button {{
+                    display: none;
+                }}
+            }}
         </style>
     </head>
     <body>
+        <button onclick="window.print()" style="padding:10px 18px; margin-bottom:20px;">
+            🖨️ Print
+        </button>
+
         <h2>{naslov}</h2>
-        <p><b>Datum:</b> {date.today().strftime("%d.%m.%Y")}</p>
-        <p><b>Iz magacina:</b> {iz_magacina}</p>
-        <p><b>Uređaj zadužio:</b> {zaduzio}</p>
+
+        <div class="info">
+            <p><b>Datum:</b> {date.today().strftime("%d.%m.%Y")}</p>
+            <p><b>Iz magacina:</b> {iz_magacina}</p>
+            <p><b>Uređaj zadužio:</b> {zaduzio}</p>
+        </div>
 
         <table>
             <tr>
@@ -103,15 +150,13 @@ def print_document_button(selected_rows, transfer_type):
             {rows_html}
         </table>
 
-        <script>
-            window.print();
-        </script>
+        <div class="signatures">
+            <div class="sig">Izdao</div>
+            <div class="sig">Primio</div>
+        </div>
     </body>
     </html>
     """
-
-    st.components.v1.html(html, height=0)
-
 
 def generate_internal_transfer(selected_rows, transfer_type):
     if not selected_rows:
@@ -156,22 +201,10 @@ def generate_internal_transfer(selected_rows, transfer_type):
 
     out = BytesIO()
     wb.save(out)
-    excel_bytes = out.getvalue()
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.download_button(
-            "📥 Preuzmi dokument",
-            data=excel_bytes,
-            file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-    with col2:
-        if st.button("🖨️ Print dokument"):
-            print_document_button(selected_rows, transfer_type)
-
+    st.session_state.generated_excel = out.getvalue()
+    st.session_state.generated_file_name = file_name
+    st.session_state.print_html = build_print_html(selected_rows, transfer_type)
 
 # =========================
 # PRETRAGA
@@ -209,13 +242,17 @@ if search_value:
 
     st.subheader(f"📦 Rezultati: {len(filtered_df)}")
 
-    if not filtered_df.empty:
+    if filtered_df.empty:
+        st.info("Nema rezultata.")
+    else:
         display_cols = [
-            "Name","Vendor","Model","Type",
-            "SPInventoryNumber","InventoryNumber","SerialNumber"
+            "Name", "Vendor", "Model", "Type",
+            "SPInventoryNumber", "InventoryNumber", "SerialNumber"
         ]
 
-        view_df = filtered_df[display_cols].copy()
+        available_cols = [c for c in display_cols if c in filtered_df.columns]
+
+        view_df = filtered_df[available_cols].copy()
         view_df.insert(0, "Izaberi", False)
 
         edited_df = st.data_editor(
@@ -224,36 +261,72 @@ if search_value:
             hide_index=True,
             height=350,
             key="editor",
-            column_config={"Izaberi": st.column_config.CheckboxColumn("Izaberi")},
-            disabled=display_cols
+            column_config={
+                "Izaberi": st.column_config.CheckboxColumn("Izaberi")
+            },
+            disabled=available_cols
         )
 
-        selected_rows = edited_df[edited_df["Izaberi"]].drop(columns=["Izaberi"])
+        selected_rows = edited_df[edited_df["Izaberi"] == True].drop(columns=["Izaberi"])
 
         if st.button("➕ Dodaj uređaj"):
+            added = 0
+
+            existing_sp = [
+                x.get("SPInventoryNumber", "")
+                for x in st.session_state.transfer_list
+            ]
+
             for _, row in selected_rows.iterrows():
-                if row["SPInventoryNumber"] not in [x["SPInventoryNumber"] for x in st.session_state.transfer_list]:
+                sp = row.get("SPInventoryNumber", "")
+
+                if sp and sp not in existing_sp:
                     st.session_state.transfer_list.append(row.to_dict())
+                    existing_sp.append(sp)
+                    added += 1
+
+            if added > 0:
+                st.success(f"Dodato uređaja: {added}")
+            else:
+                st.warning("Nema novih uređaja za dodavanje.")
+
+        st.download_button(
+            "📥 Preuzmi filtrirani CMDB",
+            data=to_excel(edited_df.drop(columns=["Izaberi"])),
+            file_name="cmdb_pregled.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+else:
+    st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
 
 # =========================
-# LISTA
+# LISTA ZA INTERNI PRENOS
 # =========================
 st.markdown("---")
 st.subheader("🔁 Lista za interni prenos")
 
 if st.session_state.transfer_list:
-    transfer_df = pd.DataFrame(st.session_state.transfer_list)
-    st.dataframe(transfer_df, use_container_width=True, hide_index=True)
+    for i, row in enumerate(st.session_state.transfer_list):
+        c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 2, 2, 1])
 
-    remove_index = st.selectbox(
-        "Ukloni uređaj",
-        [""] + list(range(1, len(st.session_state.transfer_list)+1))
-    )
+        with c1:
+            st.write(row.get("Name", ""))
+        with c2:
+            st.write(row.get("Model", ""))
+        with c3:
+            st.write(row.get("SPInventoryNumber", ""))
+        with c4:
+            st.write(row.get("InventoryNumber", ""))
+        with c5:
+            st.write(row.get("SerialNumber", ""))
+        with c6:
+            if st.button("🗑️", key=f"delete_{i}"):
+                st.session_state.transfer_list.pop(i)
+                st.rerun()
 
-    if st.button("Ukloni"):
-        if remove_index:
-            st.session_state.transfer_list.pop(remove_index-1)
-            st.rerun()
+    st.info(f"Ukupno uređaja za prenos: {len(st.session_state.transfer_list)}")
+else:
+    st.info("Lista je prazna.")
 
 col1, col2, col3 = st.columns(3)
 
@@ -268,4 +341,32 @@ with col2:
 with col3:
     if st.button("Obriši listu"):
         st.session_state.transfer_list = []
+        st.session_state.generated_excel = None
+        st.session_state.generated_file_name = ""
+        st.session_state.print_html = ""
         st.rerun()
+
+# =========================
+# DOWNLOAD + PRINT
+# =========================
+if st.session_state.generated_excel:
+    st.markdown("---")
+    st.subheader("📄 Dokument")
+
+    d1, d2 = st.columns(2)
+
+    with d1:
+        st.download_button(
+            "📥 Preuzmi Excel",
+            data=st.session_state.generated_excel,
+            file_name=st.session_state.generated_file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    with d2:
+        if st.button("🖨️ Prikaži dokument za štampu"):
+            components.html(
+                st.session_state.print_html,
+                height=900,
+                scrolling=True
+            )
