@@ -24,6 +24,9 @@ if "generated_file_name" not in st.session_state:
 if "print_html" not in st.session_state:
     st.session_state.print_html = ""
 
+if "last_chance_results" not in st.session_state:
+    st.session_state.last_chance_results = pd.DataFrame()
+
 # =========================
 # LOAD DATA
 # =========================
@@ -137,8 +140,12 @@ def generate_internal_transfer(selected_rows, transfer_type):
         file_name = "interni_prenos_NIS_NS.xlsx"
         iz_magacina_cell = "C8"
 
-    wb = load_workbook("otpremnica_template.xlsx")
-    ws = wb.active
+    try:
+        wb = load_workbook("otpremnica_template.xlsx")
+        ws = wb.active
+    except:
+        st.error("Nije pronađen fajl: otpremnica_template.xlsx")
+        return
 
     set_cell(ws, "F4", broj_prenosa)
     set_cell(ws, "G5", date.today().strftime("%d.%m.%Y"))
@@ -161,38 +168,98 @@ def generate_internal_transfer(selected_rows, transfer_type):
     st.session_state.generated_file_name = file_name
     st.session_state.print_html = build_print_html(selected_rows, transfer_type)
 
+
 def add_selected(selected_rows):
+    if selected_rows.empty:
+        st.warning("Nisi izabrao nijedan uređaj.")
+        return
+
+    added = 0
+    existing_sp = [
+        x.get("SPInventoryNumber", "")
+        for x in st.session_state.transfer_list
+    ]
+
     for _, row in selected_rows.iterrows():
-        if row["SPInventoryNumber"] not in [
-            x["SPInventoryNumber"] for x in st.session_state.transfer_list
-        ]:
+        sp = row.get("SPInventoryNumber", "")
+
+        if sp and sp not in existing_sp:
             st.session_state.transfer_list.append(row.to_dict())
+            existing_sp.append(sp)
+            added += 1
+
+    if added > 0:
+        st.success(f"Dodato uređaja: {added}")
+    else:
+        st.warning("Nema novih uređaja za dodavanje.")
 
 # =========================
 # SEARCH
 # =========================
 st.subheader("🔎 Pretraga")
 
+SEARCH_COLUMNS = [
+    "SPInventoryNumber",
+    "Name",
+    "Vendor",
+    "Model",
+    "Type",
+    "InventoryNumber",
+    "SerialNumber"
+]
+
+available_search_columns = [c for c in SEARCH_COLUMNS if c in df.columns]
+
 search_col = st.selectbox(
     "Parametar",
-    ["SPInventoryNumber","Name","Vendor","Model","Type","InventoryNumber","SerialNumber"],
-    index=0
+    available_search_columns,
+    index=available_search_columns.index("SPInventoryNumber") if "SPInventoryNumber" in available_search_columns else 0
 )
 
 search_value = st.text_input("Vrednost")
 
 if search_value:
-    filtered_df = df[df[search_col].str.contains(search_value, case=False, na=False)]
+    filtered_df = df[
+        df[search_col].astype(str).str.contains(search_value, case=False, na=False)
+    ].copy()
 
-    view_df = filtered_df.copy()
-    view_df.insert(0, "Izaberi", False)
+    st.subheader(f"📦 Rezultati: {len(filtered_df)}")
 
-    edited_df = st.data_editor(view_df, use_container_width=True, height=300)
+    if filtered_df.empty:
+        st.info("Nema rezultata.")
+    else:
+        display_cols = [
+            "Name", "Vendor", "Model", "Type",
+            "SPInventoryNumber", "InventoryNumber", "SerialNumber"
+        ]
 
-    selected = edited_df[edited_df["Izaberi"]].drop(columns=["Izaberi"])
+        available_cols = [c for c in display_cols if c in filtered_df.columns]
+        view_df = filtered_df[available_cols].copy()
 
-    if st.button("➕ Dodaj uređaj"):
-        add_selected(selected)
+        event = st.dataframe(
+            view_df,
+            use_container_width=True,
+            hide_index=True,
+            height=300,
+            key="main_results_table",
+            on_select="rerun",
+            selection_mode="multi-row"
+        )
+
+        selected_indices = event.selection.rows
+        selected = view_df.iloc[selected_indices] if selected_indices else pd.DataFrame()
+
+        if st.button("➕ Dodaj uređaj"):
+            add_selected(selected)
+
+        st.download_button(
+            "📥 Preuzmi filtrirani CMDB",
+            data=to_excel(view_df),
+            file_name="cmdb_pregled.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+else:
+    st.info("Unesi parametar za pretragu da bi se prikazali rezultati.")
 
 # =========================
 # POSLEDNJA ŠANSA
@@ -201,75 +268,135 @@ st.markdown("---")
 st.subheader("🔍 Poslednja šansa")
 st.caption("Ako nisi našao uređaj pokušaj još jednom ovde")
 
-last = st.text_input("Pretraga po svemu")
+last = st.text_input("Pretraga po svim kolonama", key="last_chance_search")
 
-if last:
-    excluded = ["Description","Owner","WarrantyExpirationDate","WarrantzExpirationDate","InstallDate","Note"]
+if st.button("🔎 Pretraži poslednja šansa"):
+    if last:
+        excluded = [
+            "Description",
+            "Owner",
+            "WarrantyExpirationDate",
+            "WarrantzExpirationDate",
+            "InstallDate",
+            "Note"
+        ]
 
-    search_df = df.drop(columns=[c for c in excluded if c in df.columns], errors="ignore")
+        search_df = df.drop(
+            columns=[c for c in excluded if c in df.columns],
+            errors="ignore"
+        )
 
-    mask = search_df.apply(
-        lambda row: row.astype(str).str.lower().str.contains(last.lower()).any(),
-        axis=1
+        mask = search_df.apply(
+            lambda row: row.astype(str).str.lower().str.contains(last.lower()).any(),
+            axis=1
+        )
+
+        st.session_state.last_chance_results = df[mask].copy()
+    else:
+        st.session_state.last_chance_results = pd.DataFrame()
+
+if not st.session_state.last_chance_results.empty:
+    st.subheader(f"📦 Rezultati poslednje šanse: {len(st.session_state.last_chance_results)}")
+
+    display_cols = [
+        "Name", "Vendor", "Model", "Type",
+        "SPInventoryNumber", "InventoryNumber", "SerialNumber"
+    ]
+
+    available_cols = [
+        c for c in display_cols
+        if c in st.session_state.last_chance_results.columns
+    ]
+
+    view_df = st.session_state.last_chance_results[available_cols].copy()
+
+    event_last = st.dataframe(
+        view_df,
+        use_container_width=True,
+        hide_index=True,
+        height=300,
+        key="last_chance_results_table",
+        on_select="rerun",
+        selection_mode="multi-row"
     )
 
-    last_df = df[mask]
-
-    view_df = last_df.copy()
-    view_df.insert(0, "Izaberi", False)
-
-    edited = st.data_editor(view_df, use_container_width=True, height=300)
-
-    selected = edited[edited["Izaberi"]].drop(columns=["Izaberi"])
+    selected_last_indices = event_last.selection.rows
+    selected_last = view_df.iloc[selected_last_indices] if selected_last_indices else pd.DataFrame()
 
     if st.button("➕ Dodaj iz poslednje šanse"):
-        add_selected(selected)
+        add_selected(selected_last)
+else:
+    st.info("Klikni na 'Pretraži poslednja šansa' da prikaže rezultate.")
 
 # =========================
-# LISTA
+# LISTA ZA INTERNI PRENOS
 # =========================
 st.markdown("---")
-st.subheader("🔁 Lista")
+st.subheader("🔁 Lista za interni prenos")
 
-for i, row in enumerate(st.session_state.transfer_list):
-    c = st.columns([2,2,2,2,2,1])
-    c[0].write(row.get("Name"))
-    c[1].write(row.get("Model"))
-    c[2].write(row.get("SPInventoryNumber"))
-    c[3].write(row.get("InventoryNumber"))
-    c[4].write(row.get("SerialNumber"))
+if st.session_state.transfer_list:
+    header = st.columns([2, 2, 2, 2, 2, 1])
+    header[0].markdown("**Name**")
+    header[1].markdown("**Model**")
+    header[2].markdown("**SP**")
+    header[3].markdown("**Inventory**")
+    header[4].markdown("**Serial**")
+    header[5].markdown("**Ukloni**")
 
-    if c[5].button("🗑️", key=f"del{i}"):
-        st.session_state.transfer_list.pop(i)
-        st.rerun()
+    for i, row in enumerate(st.session_state.transfer_list):
+        c = st.columns([2, 2, 2, 2, 2, 1])
+        c[0].write(row.get("Name", ""))
+        c[1].write(row.get("Model", ""))
+        c[2].write(row.get("SPInventoryNumber", ""))
+        c[3].write(row.get("InventoryNumber", ""))
+        c[4].write(row.get("SerialNumber", ""))
+
+        if c[5].button("🗑️", key=f"del{i}"):
+            st.session_state.transfer_list.pop(i)
+            st.rerun()
+
+    st.info(f"Ukupno uređaja za prenos: {len(st.session_state.transfer_list)}")
+else:
+    st.info("Lista je prazna.")
 
 # =========================
 # AKCIJE
 # =========================
-col1,col2,col3 = st.columns(3)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     if st.button("BG → NS"):
-        generate_internal_transfer(st.session_state.transfer_list,"BG_NS")
+        generate_internal_transfer(st.session_state.transfer_list, "BG_NS")
 
 with col2:
     if st.button("NIŠ → NS"):
-        generate_internal_transfer(st.session_state.transfer_list,"NIS_NS")
+        generate_internal_transfer(st.session_state.transfer_list, "NIS_NS")
 
 with col3:
     if st.button("Obriši listu"):
-        st.session_state.transfer_list=[]
+        st.session_state.transfer_list = []
+        st.session_state.generated_excel = None
+        st.session_state.generated_file_name = ""
+        st.session_state.print_html = ""
         st.rerun()
 
 # =========================
 # DOWNLOAD + PRINT
 # =========================
 if st.session_state.generated_excel:
-    st.download_button(
-        "📥 Download Excel",
-        st.session_state.generated_excel,
-        st.session_state.generated_file_name
-    )
+    st.markdown("---")
+    st.subheader("📄 Dokument")
 
-    if st.button("🖨️ Print dokument"):
-        components.html(st.session_state.print_html, height=800)
+    d1, d2 = st.columns(2)
+
+    with d1:
+        st.download_button(
+            "📥 Download Excel",
+            st.session_state.generated_excel,
+            st.session_state.generated_file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    with d2:
+        if st.button("🖨️ Print dokument"):
+            components.html(st.session_state.print_html, height=800)
